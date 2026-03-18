@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.venv/
+build/
+dist/
+*.egg-info/
+
+campus_login.conf
+*.log
+*.pcapng
+test.ipynb
+.ipynb_checkpoints/

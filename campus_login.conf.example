@@ -1,0 +1,17 @@
+# 校园网自动登录配置文件
+# 推荐用 `campus-login init-config` 生成本文件。
+# 凭证以明文保存，仅建议在可信设备上使用，并将权限限制为 600。
+
+[credentials]
+# username = your_username
+# password = your_password
+
+[settings]
+# 用于检测是否已联网；默认值通常够用
+check_url = https://www.baidu.com
+
+# watch 模式下的检测间隔（秒）
+check_interval = 30
+
+# 登录失败时的最大重试次数
+max_retries = 3
