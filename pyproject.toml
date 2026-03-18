@@ -4,14 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "campus-login"
-version = "0.1.1"
+dynamic = ["version"]
 description = "校园网自动登录工具（Eportal 动态公钥型）"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "wangsiyuan" }
 ]
+urls = { Homepage = "https://github.com/RustyPiano/campus-login", Repository = "https://github.com/RustyPiano/campus-login", Issues = "https://github.com/RustyPiano/campus-login/issues" }
 dependencies = [
   "requests>=2.31",
 ]
@@ -20,7 +22,6 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: End Users/Desktop",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
@@ -32,7 +33,9 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2",
   "ruff>=0.8",
+  "twine>=5.1",
 ]
 
 [project.scripts]
@@ -40,6 +43,9 @@ campus-login = "campus_login_tool.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "campus_login_tool.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

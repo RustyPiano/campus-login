@@ -12,7 +12,13 @@
 
 ## 安装
 
-在项目目录下执行：
+推荐直接从 PyPI 安装：
+
+```bash
+python3 -m pip install campus-login
+```
+
+如果是在项目目录下本地安装：
 
 ```bash
 python3 -m pip install .
@@ -209,6 +215,38 @@ python3 -m ruff check .
 python3 -m compileall src campus_login.py security.py
 python3 -m unittest discover -s tests -v
 ```
+
+如果需要本地构建并检查发布包：
+
+```bash
+python3 -m pip install -e ".[dev]"
+python3 -m build
+python3 -m twine check dist/*
+```
+
+## 发布到 PyPI
+
+当前仓库已配置为使用 GitHub Actions + PyPI Trusted Publishing 发布。建议流程：
+
+1. 修改 `src/campus_login_tool/__init__.py` 中的 `__version__`
+2. 本地执行构建检查：
+
+```bash
+python3 -m pip install -e ".[dev]"
+python3 -m build
+python3 -m twine check dist/*
+```
+
+3. 提交变更后创建并推送版本 tag：
+
+```bash
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+4. GitHub 会触发 `.github/workflows/publish.yml` 自动上传到 PyPI
+
+首次启用前，需要在 PyPI 项目侧把仓库 `RustyPiano/campus-login` 配置为 Trusted Publisher，并允许工作流 `.github/workflows/publish.yml` 使用 `pypi` 环境。
 
 ## 仓库结构
 
