@@ -71,6 +71,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
 
+    def test_logout_smoke_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "campus.conf"
+
+            with patch(
+                "campus_login_tool.cli.CampusLoginClient.logout",
+                return_value=True,
+            ) as logout_mock:
+                exit_code = main(["logout", "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 0)
+        logout_mock.assert_called_once_with(user_index=None)
+
     def test_legacy_mode_warns_about_deprecated_flags(self) -> None:
         mock_logger = Mock()
         with patch("campus_login_tool.cli.setup_logging", return_value=mock_logger), patch(

@@ -58,6 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
     login_parser.add_argument("--force", action="store_true", help="跳过登录前的联网检测")
     login_parser.set_defaults(handler=handle_login)
 
+    logout_parser = subparsers.add_parser(
+        "logout",
+        parents=[common],
+        help="退出当前校园网会话",
+    )
+    logout_parser.add_argument("--config", help=f"配置文件路径，默认 {DEFAULT_CONFIG_PATH}")
+    logout_parser.add_argument("-u", "--username", help="校园网用户名，用于派生 userIndex")
+    logout_parser.add_argument("--user-index", help="直接指定 userIndex，跳过本地派生")
+    logout_parser.set_defaults(handler=handle_logout)
+
     watch_parser = subparsers.add_parser(
         "watch",
         parents=[common, runtime],
@@ -146,7 +156,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 def legacy_main(argv: Iterable[str] | None = None) -> int:
     """Run the historical single-command interface."""
     argv_list = list(argv) if argv is not None else sys.argv[1:]
-    if argv_list and argv_list[0] in {"login", "watch", "doctor", "init-config"}:
+    if argv_list and argv_list[0] in {"login", "logout", "watch", "doctor", "init-config"}:
         return main(argv_list)
 
     parser = build_legacy_parser()
@@ -203,6 +213,14 @@ def handle_watch(args: argparse.Namespace, logger) -> int:
     runner = WatchRunner(client, logger)
     runner.run()
     return 0
+
+
+def handle_logout(args: argparse.Namespace, logger) -> int:
+    """Log out the current online session if one exists."""
+    config = _resolve_runtime_config(args, require_credentials=False)
+    _log_config_summary(config, logger, include_credentials=False)
+    client = CampusLoginClient(config, logger)
+    return 0 if client.logout(user_index=getattr(args, "user_index", None)) else 1
 
 
 def handle_doctor(args: argparse.Namespace, logger) -> int:

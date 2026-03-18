@@ -65,7 +65,19 @@ campus-login doctor
 campus-login login
 ```
 
-5. 前台持续监控并自动重连：
+5. 主动退出当前在线会话：
+
+```bash
+campus-login logout
+```
+
+如果当前会话不是由本工具刚刚登录，推荐同时提供用户名帮助派生 `userIndex`：
+
+```bash
+campus-login logout --username your_name
+```
+
+6. 前台持续监控并自动重连：
 
 ```bash
 campus-login watch
@@ -94,6 +106,18 @@ campus-login login -v --log-file ./campus-login.log
 ```bash
 campus-login watch --interval 30 --retries 3
 ```
+
+### `campus-login logout`
+
+退出当前在线校园网会话。
+
+```bash
+campus-login logout
+campus-login logout --username your_name
+campus-login logout --user-index your_user_index
+```
+
+默认不要求密码；如果检测到当前没有在线会话，会提示无需退出并返回成功。
 
 ### `campus-login doctor`
 

@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ class CampusLoginClient:
         self._session_factory = session_factory
         self._request_get = request_get
         self._sleep = sleep_func
+        self._last_user_index: str | None = None
 
     def _create_session(self) -> requests.Session:
         session = self._session_factory()
@@ -195,6 +197,124 @@ class CampusLoginClient:
             },
         )
 
+    def build_interface_request(self, method: str, data: PreparedData) -> PreparedRequest:
+        """Build a portal interface request that targets a method under InterFace.do."""
+        parsed = urlparse(self.config.trigger_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        endpoint = urljoin(self.config.trigger_url, f"/eportal/InterFace.do?method={method}")
+        return PreparedRequest(
+            url=endpoint,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Origin": origin,
+                "Referer": self.config.trigger_url,
+                "Accept": "*/*",
+            },
+            data=data,
+        )
+
+    def _parse_json_response(
+        self,
+        response: requests.Response,
+        *,
+        action: str,
+    ) -> dict | None:
+        try:
+            payload = response.json()
+        except json.JSONDecodeError:
+            content = self._decode_response(response)
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError as exc:
+                self.logger.error("解析%s响应失败: %s", action, exc)
+                self.logger.debug("%s响应片段: %s", action, truncate_text(content))
+                return None
+
+        if isinstance(payload, dict):
+            return payload
+
+        self.logger.error("%s响应不是 JSON 对象。", action)
+        self.logger.debug("%s响应内容: %s", action, truncate_text(str(payload)))
+        return None
+
+    def _post_interface_json(
+        self,
+        method: str,
+        data: PreparedData,
+        *,
+        timeout: int = 15,
+    ) -> dict | None:
+        if self.session is None:
+            raise RuntimeError("portal 请求前尚未初始化 session。")
+
+        request = self.build_interface_request(method, data)
+        try:
+            response = self.session.post(
+                request.url,
+                headers=request.headers,
+                data=request.data,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            self.logger.error("请求 %s 失败: %s", method, exc)
+            return None
+
+        payload = self._parse_json_response(response, action=method)
+        if payload is not None:
+            self.logger.debug("%s 响应字段: %s", method, ", ".join(sorted(payload.keys())))
+        return payload
+
+    @staticmethod
+    def _looks_like_not_online(message: str) -> bool:
+        lowered = message.lower()
+        patterns = ("未在线", "不在线", "已下线", "不存在", "not online", "offline")
+        return any(pattern in lowered or pattern in message for pattern in patterns)
+
+    def _get_local_ip(self) -> str | None:
+        parsed = urlparse(self.config.trigger_url)
+        if not parsed.hostname:
+            return None
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect((parsed.hostname, 80))
+                return sock.getsockname()[0]
+        except OSError as exc:
+            self.logger.debug("解析本机校园网 IP 失败: %s", exc)
+            return None
+
+    def _derive_user_index(self) -> str | None:
+        if not self.config.username:
+            self.logger.debug("未配置用户名，无法派生 userIndex。")
+            return None
+
+        login_page_url = self._get_login_page_url()
+        if not login_page_url:
+            return None
+
+        parsed = urlparse(login_page_url)
+        nasip = parse_qs(parsed.query).get("nasip", [None])[0]
+        if not nasip:
+            self.logger.debug("登录页参数缺少 nasip，无法派生 userIndex。")
+            return None
+
+        local_ip = self._get_local_ip()
+        if not local_ip:
+            self.logger.debug("无法识别本机校园网 IP，无法派生 userIndex。")
+            return None
+
+        derived = f"{nasip}_{local_ip}_{self.config.username}".encode().hex()
+        self.logger.debug("已根据 nasip、本机 IP 和用户名派生 userIndex。")
+        return derived
+
+    def _resolve_user_index(self, user_index: str | None = None) -> str | None:
+        if user_index:
+            return user_index
+        if self._last_user_index:
+            return self._last_user_index
+        return self._derive_user_index()
+
     def _get_login_page_url(self) -> str | None:
         self.logger.info("正在访问认证触发地址")
         self.logger.debug("认证触发地址: %s", self.config.trigger_url)
@@ -274,7 +394,73 @@ class CampusLoginClient:
 
         content = self._decode_response(response)
         self.logger.debug("登录响应片段: %s", truncate_text(content))
-        return self._parse_login_response(content)
+        success, message = self._parse_login_response(content)
+        if success:
+            payload = self._parse_json_response(response, action="login")
+            if payload is not None:
+                self._last_user_index = payload.get("userIndex") or self._last_user_index
+        return success, message
+
+    def get_online_user_info(self, user_index: str) -> dict | None:
+        """Fetch online session information for a userIndex."""
+        return self._post_interface_json(
+            "getOnlineUserInfo",
+            {"userIndex": user_index},
+        )
+
+    def logout(self, user_index: str | None = None) -> bool:
+        """Log out the current campus network session if one is active."""
+        self.logger.info("开始校园网退出登录")
+        self.session = self._create_session()
+        try:
+            resolved_user_index = self._resolve_user_index(user_index)
+            if not resolved_user_index:
+                self.logger.error(
+                    "无法确定 userIndex。"
+                    "若当前会话不是由本工具刚登录，请提供 --username 或 --user-index。"
+                )
+                return False
+
+            info = self.get_online_user_info(resolved_user_index)
+            if info is None:
+                return False
+
+            if info.get("result") != "success":
+                message = str(info.get("message") or "获取在线状态失败")
+                if self._looks_like_not_online(message):
+                    self.logger.info("当前未检测到在线会话，无需退出。")
+                    return True
+                self.logger.error("获取在线状态失败: %s", message)
+                return False
+
+            self.logger.info("检测到在线会话，正在提交退出请求。")
+            payload = self._post_interface_json(
+                "logout",
+                {"userIndex": resolved_user_index},
+            )
+            if payload is None:
+                return False
+
+            if payload.get("result") == "success":
+                message = str(payload.get("message") or "下线成功")
+                self.logger.info(message)
+                self._last_user_index = None
+                return True
+
+            message = str(payload.get("message") or "退出登录失败")
+            if self._looks_like_not_online(message):
+                self.logger.info("当前未检测到在线会话，无需退出。")
+                return True
+
+            self.logger.error("退出登录失败: %s", message)
+            return False
+        except Exception as exc:  # pragma: no cover - safety net
+            self.logger.exception("退出登录过程发生未处理异常: %s", exc)
+            return False
+        finally:
+            if self.session is not None:
+                self.session.close()
+                self.session = None
 
     def login(self) -> bool:
         """Execute the full login flow."""

@@ -141,6 +141,15 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(prepared.data["service"], "campus")
         self.assertIn("%3D", prepared.data["queryString"])
 
+    def test_build_interface_request_targets_portal_method(self) -> None:
+        client = CampusLoginClient(make_config(), make_logger())
+
+        prepared = client.build_interface_request("logout", {"userIndex": "abc"})
+
+        self.assertEqual(prepared.url, "http://123.123.123.123/eportal/InterFace.do?method=logout")
+        self.assertEqual(prepared.data["userIndex"], "abc")
+        self.assertEqual(prepared.headers["Origin"], "http://123.123.123.123")
+
     def test_get_page_info_falls_back_to_manual_json_decode(self) -> None:
         json_content = (FIXTURES / "pageinfo.json").read_text(encoding="utf-8")
         client = CampusLoginClient(make_config(), make_logger(), session_factory=FakeSession)
@@ -188,6 +197,71 @@ class ClientTests(unittest.TestCase):
         encrypt_mock.assert_called_once()
         self.assertEqual(encrypt_mock.call_args.args[0], "test_password")
         self.assertEqual(encrypt_mock.call_args.args[3], "5fdcd87b4a9fecfe22921ef5c80e86b4")
+
+    def test_login_caches_user_index_from_success_response(self) -> None:
+        redirect_html = (FIXTURES / "redirect.html").read_text(encoding="utf-8").encode("utf-8")
+        session = FakeSession(
+            get_responses=[
+                FakeResponse(content=redirect_html),
+                FakeResponse(content=b"<html>login page</html>"),
+            ]
+        )
+        client = CampusLoginClient(make_config(), make_logger(), session_factory=lambda: session)
+        page_info = json.loads((FIXTURES / "pageinfo.json").read_text(encoding="utf-8"))
+
+        with (
+            patch("campus_login_tool.client.encryptPassword", return_value="encrypted"),
+            patch.object(client, "_get_page_info", return_value=page_info),
+            patch.object(
+                client.session if client.session is not None else session,
+                "post",
+                return_value=FakeResponse(
+                    content=b'{"result":"success","message":"","userIndex":"derived-index"}',
+                    json_data={"result": "success", "message": "", "userIndex": "derived-index"},
+                ),
+            ),
+        ):
+            result = client.login()
+
+        self.assertTrue(result)
+        self.assertEqual(client._last_user_index, "derived-index")
+
+    def test_logout_returns_success_when_user_is_not_online(self) -> None:
+        client = CampusLoginClient(make_config(), make_logger(), session_factory=FakeSession)
+
+        with (
+            patch.object(client, "_resolve_user_index", return_value="user-index"),
+            patch.object(
+                client,
+                "get_online_user_info",
+                return_value={"result": "fail", "message": "当前用户不在线"},
+            ),
+        ):
+            result = client.logout()
+
+        self.assertTrue(result)
+
+    def test_logout_posts_logout_after_online_check(self) -> None:
+        client = CampusLoginClient(make_config(), make_logger(), session_factory=FakeSession)
+
+        with (
+            patch.object(client, "_resolve_user_index", return_value="user-index"),
+            patch.object(
+                client,
+                "get_online_user_info",
+                return_value={"result": "success", "userId": "test_user"},
+            ) as info_mock,
+            patch.object(
+                client,
+                "_post_interface_json",
+                return_value={"result": "success", "message": "下线成功"},
+            ) as post_mock,
+        ):
+            result = client.logout()
+
+        self.assertTrue(result)
+        info_mock.assert_called_once_with("user-index")
+        post_mock.assert_called_once_with("logout", {"userIndex": "user-index"})
 
     def test_login_with_retry_uses_backoff(self) -> None:
         sleep_calls = []
