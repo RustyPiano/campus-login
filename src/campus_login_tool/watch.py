@@ -1,14 +1,11 @@
 """Foreground watch loop for reconnecting the campus network."""
 
-from __future__ import annotations
-
 import logging
 import signal
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .client import CampusLoginClient
-
 
 SleepFunc = Callable[[float], None]
 

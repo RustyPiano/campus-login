@@ -1,16 +1,14 @@
 """Command line interface for the campus login tool."""
 
-from __future__ import annotations
-
 import argparse
 import sys
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from . import __version__
 from .client import CampusLoginClient
 from .config import (
-    ConfigError,
     DEFAULT_CONFIG_PATH,
+    ConfigError,
     ResolvedConfig,
     describe_credential_source,
     determine_config_path,
@@ -117,7 +115,12 @@ def build_legacy_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="从标准输入读取密码，适合与密码管理器或管道配合使用",
     )
-    parser.add_argument("-d", "--daemon", action="store_true", help="已弃用：改用 `campus-login watch`")
+    parser.add_argument(
+        "-d",
+        "--daemon",
+        action="store_true",
+        help="已弃用：改用 `campus-login watch`",
+    )
     parser.add_argument("--config", help=f"配置文件路径，默认 {DEFAULT_CONFIG_PATH}")
     parser.add_argument("--check-url", dest="check_url", help="网络检测 URL")
     parser.add_argument("-i", "--interval", dest="check_interval", type=int, help="检测间隔（秒）")
@@ -128,7 +131,7 @@ def build_legacy_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     """Run the primary CLI."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -140,7 +143,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 2
 
 
-def legacy_main(argv: Optional[Iterable[str]] = None) -> int:
+def legacy_main(argv: Iterable[str] | None = None) -> int:
     """Run the historical single-command interface."""
     argv_list = list(argv) if argv is not None else sys.argv[1:]
     if argv_list and argv_list[0] in {"login", "watch", "doctor", "init-config"}:
@@ -276,13 +279,21 @@ def _resolve_runtime_config(
 
     cli_values = {
         "username": getattr(args, "username", None),
-        "password": password_from_stdin if password_from_stdin is not None else getattr(args, "password", None),
+        "password": (
+            password_from_stdin
+            if password_from_stdin is not None
+            else getattr(args, "password", None)
+        ),
         "check_url": getattr(args, "check_url", None),
         "check_interval": getattr(args, "check_interval", None),
         "max_retries": getattr(args, "max_retries", None),
     }
 
-    resolved = resolve_config(cli_values=cli_values, config_path=config_path, require_credentials=False)
+    resolved = resolve_config(
+        cli_values=cli_values,
+        config_path=config_path,
+        require_credentials=False,
+    )
 
     if require_credentials and not resolved.username:
         prompted_username = _read_username_from_tty_if_needed()
@@ -301,14 +312,14 @@ def _resolve_runtime_config(
     )
 
 
-def _read_username_from_tty_if_needed() -> Optional[str]:
+def _read_username_from_tty_if_needed() -> str | None:
     if not sys.stdin.isatty():
         return None
     username = input("请输入校园网用户名: ")
     return username.strip() or None
 
 
-def _read_password_from_tty_if_needed() -> Optional[str]:
+def _read_password_from_tty_if_needed() -> str | None:
     if not sys.stdin.isatty():
         return None
 

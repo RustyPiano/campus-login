@@ -1,7 +1,5 @@
 """CLI smoke tests."""
 
-from __future__ import annotations
-
 import io
 import tempfile
 import unittest
@@ -35,9 +33,15 @@ class CliTests(unittest.TestCase):
             )
             config_path.chmod(0o600)
 
-            with patch("campus_login_tool.cli.CampusLoginClient.check_internet", return_value=True), patch(
-                "campus_login_tool.cli.CampusLoginClient.probe_auth_trigger",
-                return_value=(True, "http://172.16.128.139/eportal/index.jsp"),
+            with (
+                patch(
+                    "campus_login_tool.cli.CampusLoginClient.check_internet",
+                    return_value=True,
+                ),
+                patch(
+                    "campus_login_tool.cli.CampusLoginClient.probe_auth_trigger",
+                    return_value=(True, "http://172.16.128.139/eportal/index.jsp"),
+                ),
             ):
                 exit_code = main(["doctor", "--config", str(config_path)])
 
@@ -52,10 +56,16 @@ class CliTests(unittest.TestCase):
             )
             config_path.chmod(0o600)
 
-            with patch("campus_login_tool.cli.CampusLoginClient.check_internet", return_value=True), patch(
-                "campus_login_tool.cli.WatchRunner.run",
-                return_value=None,
-            ) as run_mock:
+            with (
+                patch(
+                    "campus_login_tool.cli.CampusLoginClient.check_internet",
+                    return_value=True,
+                ),
+                patch(
+                    "campus_login_tool.cli.WatchRunner.run",
+                    return_value=None,
+                ) as run_mock,
+            ):
                 exit_code = main(["watch", "--config", str(config_path)])
 
         self.assertEqual(exit_code, 0)
@@ -81,7 +91,10 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "campus.conf"
 
-            with patch("campus_login_tool.cli.CampusLoginClient.login_with_retry", return_value=True):
+            with patch(
+                "campus_login_tool.cli.CampusLoginClient.login_with_retry",
+                return_value=True,
+            ):
                 with patch("sys.stdin", io.StringIO("secret\n")):
                     exit_code = main(
                         [

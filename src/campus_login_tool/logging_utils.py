@@ -1,14 +1,11 @@
 """Logging helpers for the campus login CLI."""
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 
-def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> logging.Logger:
+def setup_logging(verbose: bool = False, log_file: str | None = None) -> logging.Logger:
     """Create the application logger."""
     logger = logging.getLogger("campus_login")
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)

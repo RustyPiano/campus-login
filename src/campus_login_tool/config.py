@@ -1,13 +1,13 @@
 """Configuration loading and validation."""
 
-from __future__ import annotations
-
 import os
 import stat
-from configparser import ConfigParser, Error as ConfigParserError
+from collections.abc import Mapping
+from configparser import ConfigParser
+from configparser import Error as ConfigParserError
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any
 
 DEFAULT_TRIGGER_URL = "http://123.123.123.123"
 DEFAULT_INTERNET_CHECK_URL = "https://www.baidu.com"
@@ -68,7 +68,7 @@ class ResolvedConfig:
         return bool(self.username and self.password)
 
 
-def determine_config_path(cli_path: Optional[str]) -> Path:
+def determine_config_path(cli_path: str | None) -> Path:
     """Resolve the configuration path with CLI > env > default precedence."""
     raw_path = cli_path or os.getenv(ENV_CONFIG_PATH)
     return Path(raw_path).expanduser() if raw_path else DEFAULT_CONFIG_PATH
@@ -93,8 +93,14 @@ def _read_config_file(path: Path) -> dict[str, Any]:
         "username": _normalize_value(credentials.get("username")),
         "password": password,
         "check_url": _normalize_value(settings.get("check_url")),
-        "check_interval": _parse_optional_int(settings.get("check_interval"), "配置文件中的 check_interval"),
-        "max_retries": _parse_optional_int(settings.get("max_retries"), "配置文件中的 max_retries"),
+        "check_interval": _parse_optional_int(
+            settings.get("check_interval"),
+            "配置文件中的 check_interval",
+        ),
+        "max_retries": _parse_optional_int(
+            settings.get("max_retries"),
+            "配置文件中的 max_retries",
+        ),
     }
 
 
@@ -205,8 +211,10 @@ def ensure_secure_config_permissions(path: Path) -> None:
 
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
+        chmod_hint = f"chmod 600 {path}"
         raise ConfigError(
-            f"配置文件权限过宽 ({oct(mode)})：{path}。如果文件中保存了密码，请先执行 `chmod 600 {path}`。"
+            f"配置文件权限过宽 ({oct(mode)})：{path}。"
+            f"如果文件中保存了密码，请先执行 `{chmod_hint}`。"
         )
 
 
@@ -221,7 +229,7 @@ def describe_credential_source(resolved: ResolvedConfig) -> str:
     return "未配置"
 
 
-def _parse_optional_int(raw_value: Optional[str], label: str) -> Optional[int]:
+def _parse_optional_int(raw_value: str | None, label: str) -> int | None:
     value = _normalize_value(raw_value)
     if value is None:
         return None
@@ -231,7 +239,7 @@ def _parse_optional_int(raw_value: Optional[str], label: str) -> Optional[int]:
         raise ConfigError(f"{label} 必须是整数，当前值为 {value!r}。") from exc
 
 
-def _first_defined(*candidates: Tuple[Any, str]) -> Tuple[Any, str]:
+def _first_defined(*candidates: tuple[Any, str]) -> tuple[Any, str]:
     for value, source in candidates:
         if value is None:
             continue
@@ -239,7 +247,7 @@ def _first_defined(*candidates: Tuple[Any, str]) -> Tuple[Any, str]:
     return None, "missing"
 
 
-def _normalize_value(value: Optional[str]) -> Optional[str]:
+def _normalize_value(value: str | None) -> str | None:
     if value is None:
         return None
     stripped = value.strip()

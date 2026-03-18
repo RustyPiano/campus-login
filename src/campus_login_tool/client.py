@@ -1,15 +1,13 @@
 """Core network client for the Eportal login flow."""
 
-from __future__ import annotations
-
 import gzip
 import io
 import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
@@ -17,7 +15,6 @@ import requests
 from .config import ResolvedConfig
 from .logging_utils import mask_value, sanitize_url, truncate_text
 from .security import encryptPassword
-
 
 PreparedData = dict[str, str]
 SleepFunc = Callable[[float], None]
@@ -46,7 +43,7 @@ class CampusLoginClient:
     ) -> None:
         self.config = config
         self.logger = logger
-        self.session: Optional[requests.Session] = None
+        self.session: requests.Session | None = None
         self._session_factory = session_factory
         self._request_get = request_get
         self._sleep = sleep_func
@@ -88,7 +85,7 @@ class CampusLoginClient:
         return payload.decode("utf-8", errors="replace")
 
     @staticmethod
-    def _extract_redirect_url(content: str) -> Optional[str]:
+    def _extract_redirect_url(content: str) -> str | None:
         patterns = (
             r"top\.self\.location\.href='(.*?)'",
             r'top\.self\.location\.href="(.*?)"',
@@ -102,14 +99,15 @@ class CampusLoginClient:
         return None
 
     @staticmethod
-    def _parse_login_response(content: str) -> Tuple[bool, str]:
+    def _parse_login_response(content: str) -> tuple[bool, str]:
         try:
             payload = json.loads(content)
         except json.JSONDecodeError:
             lowered = content.lower()
             if "success" in lowered or "成功" in content:
                 return True, "登录成功（通过响应文本识别）"
-            return False, f"无法识别登录响应，请使用 --verbose 查看详情。响应片段: {truncate_text(content, 80)}"
+            detail = truncate_text(content, 80)
+            return False, f"无法识别登录响应，请使用 --verbose 查看详情。响应片段: {detail}"
 
         if payload.get("result") == "success":
             message = payload.get("message") or "登录成功"
@@ -121,7 +119,11 @@ class CampusLoginClient:
     def check_internet(self, timeout: int = 5) -> bool:
         """Check whether the configured probe URL is reachable."""
         try:
-            response = self._request_get(self.config.check_url, timeout=timeout, allow_redirects=True)
+            response = self._request_get(
+                self.config.check_url,
+                timeout=timeout,
+                allow_redirects=True,
+            )
         except requests.exceptions.Timeout:
             self.logger.debug("网络检测超时: %s", self.config.check_url)
             return False
@@ -136,7 +138,7 @@ class CampusLoginClient:
         self.logger.debug("网络检测返回异常状态: %s", response.status_code)
         return False
 
-    def probe_auth_trigger(self, timeout: int = 10) -> Tuple[bool, str]:
+    def probe_auth_trigger(self, timeout: int = 10) -> tuple[bool, str]:
         """Probe the trigger endpoint and report whether a login page is discoverable."""
         session = self._create_session()
         try:
@@ -193,7 +195,7 @@ class CampusLoginClient:
             },
         )
 
-    def _get_login_page_url(self) -> Optional[str]:
+    def _get_login_page_url(self) -> str | None:
         self.logger.info("正在访问认证触发地址")
         self.logger.debug("认证触发地址: %s", self.config.trigger_url)
 
@@ -215,7 +217,7 @@ class CampusLoginClient:
         self.logger.debug("触发响应片段: %s", truncate_text(content))
         return None
 
-    def _get_page_info(self, login_page_url: str, query_string: str) -> Optional[dict]:
+    def _get_page_info(self, login_page_url: str, query_string: str) -> dict | None:
         request = self.build_page_info_request(login_page_url, query_string)
         self.logger.info("正在获取 pageInfo 公钥信息")
         try:
@@ -250,8 +252,13 @@ class CampusLoginClient:
         query_string: str,
         encrypted_password: str,
         service: str = "",
-    ) -> Tuple[bool, str]:
-        request = self.build_login_request(login_page_url, query_string, encrypted_password, service)
+    ) -> tuple[bool, str]:
+        request = self.build_login_request(
+            login_page_url,
+            query_string,
+            encrypted_password,
+            service,
+        )
         self.logger.info("正在提交登录请求")
 
         try:

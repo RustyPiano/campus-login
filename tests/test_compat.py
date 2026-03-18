@@ -1,14 +1,11 @@
 """Compatibility and documentation regression tests."""
 
-from __future__ import annotations
-
 import importlib
 import unittest
 from pathlib import Path
 
 from campus_login_tool import security as package_security
 from campus_login_tool.config import CONFIG_TEMPLATE
-
 
 ROOT = Path(__file__).resolve().parent.parent
 

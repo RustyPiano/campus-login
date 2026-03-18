@@ -5,8 +5,6 @@ algorithm is plain modular exponentiation over 16-bit words. Python's built-in
 integers can perform the same work directly and much more efficiently.
 """
 
-from __future__ import annotations
-
 
 biRadixBits = 16
 bitsPerDigit = biRadixBits

@@ -1,11 +1,8 @@
 """Regression tests for RSA password encryption."""
 
-from __future__ import annotations
-
 import unittest
 
 from campus_login_tool.security import encryptPassword
-
 
 MODULUS = (
     "94dd2a8675fb779e6b9f7103698634cd400f27a154afa67af6166a43fc264172"

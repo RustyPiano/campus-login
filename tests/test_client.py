@@ -1,11 +1,8 @@
 """Tests for low-level protocol behavior."""
 
-from __future__ import annotations
-
 import gzip
 import json
 import logging
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -16,12 +13,19 @@ import requests
 from campus_login_tool.client import CampusLoginClient
 from campus_login_tool.config import ResolvedConfig
 
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeResponse:
-    def __init__(self, *, content: bytes, status_code: int = 200, headers=None, json_data=None, json_exc=None):
+    def __init__(
+        self,
+        *,
+        content: bytes,
+        status_code: int = 200,
+        headers=None,
+        json_data=None,
+        json_exc=None,
+    ):
         self.content = content
         self.status_code = status_code
         self.headers = headers or {}
@@ -98,7 +102,9 @@ class ClientTests(unittest.TestCase):
         self.assertIn("/eportal/index.jsp", redirect_url)
 
     def test_parse_login_response_success_and_failure(self) -> None:
-        success, message = CampusLoginClient._parse_login_response('{"result":"success","message":""}')
+        success, message = CampusLoginClient._parse_login_response(
+            '{"result":"success","message":""}'
+        )
         failure, fail_message = CampusLoginClient._parse_login_response(
             '{"result":"fail","message":"用户名或密码错误"}'
         )
@@ -164,11 +170,18 @@ class ClientTests(unittest.TestCase):
         client = CampusLoginClient(make_config(), make_logger(), session_factory=lambda: session)
         page_info = json.loads((FIXTURES / "pageinfo.json").read_text(encoding="utf-8"))
 
-        with patch("campus_login_tool.client.encryptPassword", return_value="encrypted") as encrypt_mock, patch.object(
-            client,
-            "_get_page_info",
-            return_value=page_info,
-        ), patch.object(client, "_submit_login", return_value=(True, "ok")):
+        with (
+            patch(
+                "campus_login_tool.client.encryptPassword",
+                return_value="encrypted",
+            ) as encrypt_mock,
+            patch.object(
+                client,
+                "_get_page_info",
+                return_value=page_info,
+            ),
+            patch.object(client, "_submit_login", return_value=(True, "ok")),
+        ):
             result = client.login()
 
         self.assertTrue(result)
