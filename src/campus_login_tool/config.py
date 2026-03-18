@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_TRIGGER_URL = "http://123.123.123.123"
+DEFAULT_TRIGGER_URL = "http://172.16.128.139/"
 DEFAULT_INTERNET_CHECK_URL = "https://www.baidu.com"
 DEFAULT_CHECK_INTERVAL = 30
 DEFAULT_MAX_RETRIES = 3

@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import re
-import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -144,11 +143,13 @@ class CampusLoginClient:
         """Probe the trigger endpoint and report whether a login page is discoverable."""
         session = self._create_session()
         try:
-            response = session.get(self.config.trigger_url, timeout=timeout, allow_redirects=False)
-            content = self._decode_response(response)
-            login_url = self._extract_redirect_url(content)
+            response = session.get(self.config.trigger_url, timeout=timeout, allow_redirects=True)
+            login_url = self._find_login_page_url(response)
             if login_url:
                 return True, sanitize_url(login_url)
+            user_index, status = self._discover_user_index_from_response(response)
+            if status == "online" and user_index:
+                return True, "当前已在线，并发现有效会话。"
             return False, f"认证触发地址返回了 HTTP {response.status_code}，但未找到登录页跳转。"
         except requests.exceptions.RequestException as exc:
             return False, f"无法访问认证触发地址: {exc}"
@@ -219,16 +220,13 @@ class CampusLoginClient:
         *,
         action: str,
     ) -> dict | None:
+        content = self._decode_response(response)
         try:
-            payload = response.json()
-        except json.JSONDecodeError:
-            content = self._decode_response(response)
-            try:
-                payload = json.loads(content)
-            except json.JSONDecodeError as exc:
-                self.logger.error("解析%s响应失败: %s", action, exc)
-                self.logger.debug("%s响应片段: %s", action, truncate_text(content))
-                return None
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            self.logger.error("解析%s响应失败: %s", action, exc)
+            self.logger.debug("%s响应片段: %s", action, truncate_text(content))
+            return None
 
         if isinstance(payload, dict):
             return payload
@@ -271,70 +269,132 @@ class CampusLoginClient:
         patterns = ("未在线", "不在线", "已下线", "不存在", "not online", "offline")
         return any(pattern in lowered or pattern in message for pattern in patterns)
 
-    def _get_local_ip(self) -> str | None:
-        parsed = urlparse(self.config.trigger_url)
-        if not parsed.hostname:
-            return None
+    @staticmethod
+    def _looks_like_incomplete_user_info(message: str) -> bool:
+        patterns = ("用户信息不完整", "信息不完整", "please retry")
+        lowered = message.lower()
+        return any(pattern in message or pattern in lowered for pattern in patterns)
 
+    @staticmethod
+    def _extract_user_index_from_url(url: str) -> str | None:
+        parsed = urlparse(url)
+        return parse_qs(parsed.query).get("userIndex", [None])[0]
+
+    @staticmethod
+    def _extract_user_index_from_content(content: str) -> str | None:
+        patterns = (
+            r"userIndex=([0-9a-fA-F]+)",
+            r'"userIndex"\s*:\s*"([0-9a-fA-F]+)"',
+            r"userIndex\s*[:=]\s*['\"]?([0-9a-fA-F]+)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                return match.group(1)
+        return None
+
+    @staticmethod
+    def _looks_like_login_page_url(url: str) -> bool:
+        parsed = urlparse(url)
+        if not parsed.path.endswith("/eportal/index.jsp"):
+            return False
+        query = parse_qs(parsed.query)
+        return any(key in query for key in ("wlanuserip", "nasip", "mac"))
+
+    def _iter_response_urls_and_content(
+        self,
+        response: requests.Response,
+    ) -> tuple[list[str], list[str]]:
+        urls: list[str] = []
+        contents: list[str] = []
+        for item in [*response.history, response]:
+            if item.url:
+                urls.append(item.url)
+
+            location = item.headers.get("Location")
+            if location:
+                urls.append(urljoin(item.url or self.config.trigger_url, location))
+
+            content = self._decode_response(item)
+            contents.append(content)
+
+            redirect_url = self._extract_redirect_url(content)
+            if redirect_url:
+                urls.append(urljoin(item.url or self.config.trigger_url, redirect_url))
+
+        return urls, contents
+
+    def _find_login_page_url(self, response: requests.Response) -> str | None:
+        urls, _ = self._iter_response_urls_and_content(response)
+        for url in urls:
+            if self._looks_like_login_page_url(url):
+                return url
+        return None
+
+    def _discover_user_index_from_response(
+        self,
+        response: requests.Response,
+    ) -> tuple[str | None, str]:
+        urls, contents = self._iter_response_urls_and_content(response)
+
+        for url in urls:
+            user_index = self._extract_user_index_from_url(url)
+            if user_index:
+                return user_index, "online"
+
+        for content in contents:
+            user_index = self._extract_user_index_from_content(content)
+            if user_index:
+                return user_index, "online"
+
+        for url in urls:
+            if self._looks_like_login_page_url(url):
+                return None, "not_online"
+
+        return None, "error"
+
+    def _discover_user_index(self) -> tuple[str | None, str]:
+        self.logger.info("正在发现当前在线会话的 userIndex")
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.connect((parsed.hostname, 80))
-                return sock.getsockname()[0]
-        except OSError as exc:
-            self.logger.debug("解析本机校园网 IP 失败: %s", exc)
-            return None
+            response = self.session.get(self.config.trigger_url, timeout=15, allow_redirects=True)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            self.logger.error("访问认证入口失败: %s", exc)
+            return None, "error"
 
-    def _derive_user_index(self) -> str | None:
-        if not self.config.username:
-            self.logger.debug("未配置用户名，无法派生 userIndex。")
-            return None
+        user_index, status = self._discover_user_index_from_response(response)
+        if status == "online" and user_index:
+            self.logger.info("已从认证入口发现 userIndex")
+            return user_index, status
+        if status == "not_online":
+            self.logger.info("认证入口当前返回登录页，说明当前未在线。")
+            return None, status
 
-        login_page_url = self._get_login_page_url()
-        if not login_page_url:
-            return None
-
-        parsed = urlparse(login_page_url)
-        nasip = parse_qs(parsed.query).get("nasip", [None])[0]
-        if not nasip:
-            self.logger.debug("登录页参数缺少 nasip，无法派生 userIndex。")
-            return None
-
-        local_ip = self._get_local_ip()
-        if not local_ip:
-            self.logger.debug("无法识别本机校园网 IP，无法派生 userIndex。")
-            return None
-
-        derived = f"{nasip}_{local_ip}_{self.config.username}".encode().hex()
-        self.logger.debug("已根据 nasip、本机 IP 和用户名派生 userIndex。")
-        return derived
-
-    def _resolve_user_index(self, user_index: str | None = None) -> str | None:
-        if user_index:
-            return user_index
-        if self._last_user_index:
-            return self._last_user_index
-        return self._derive_user_index()
+        self.logger.error("无法从认证入口响应中提取 userIndex。")
+        urls, _ = self._iter_response_urls_and_content(response)
+        if urls:
+            self.logger.debug("认证入口候选 URL: %s", " | ".join(sanitize_url(url) for url in urls))
+        return None, status
 
     def _get_login_page_url(self) -> str | None:
         self.logger.info("正在访问认证触发地址")
         self.logger.debug("认证触发地址: %s", self.config.trigger_url)
 
         try:
-            response = self.session.get(self.config.trigger_url, timeout=15, allow_redirects=False)
+            response = self.session.get(self.config.trigger_url, timeout=15, allow_redirects=True)
             response.raise_for_status()
         except requests.exceptions.RequestException as exc:
             self.logger.error("访问认证触发地址失败: %s", exc)
             return None
 
-        content = self._decode_response(response)
-        login_url = self._extract_redirect_url(content)
+        login_url = self._find_login_page_url(response)
         if login_url:
             self.logger.info("已发现登录页面")
             self.logger.debug("登录页面 URL: %s", sanitize_url(login_url))
             return login_url
 
         self.logger.error("无法从认证触发响应中提取登录页面 URL。")
-        self.logger.debug("触发响应片段: %s", truncate_text(content))
+        self.logger.debug("触发入口最终 URL: %s", sanitize_url(response.url))
         return None
 
     def _get_page_info(self, login_page_url: str, query_string: str) -> dict | None:
@@ -352,16 +412,13 @@ class CampusLoginClient:
             self.logger.error("请求 pageInfo 失败: %s", exc)
             return None
 
+        content = self._decode_response(response)
         try:
-            payload = response.json()
-        except json.JSONDecodeError:
-            content = self._decode_response(response)
-            try:
-                payload = json.loads(content)
-            except json.JSONDecodeError as exc:
-                self.logger.error("解析 pageInfo 响应失败: %s", exc)
-                self.logger.debug("pageInfo 响应片段: %s", truncate_text(content))
-                return None
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            self.logger.error("解析 pageInfo 响应失败: %s", exc)
+            self.logger.debug("pageInfo 响应片段: %s", truncate_text(content))
+            return None
 
         self.logger.debug("pageInfo 字段: %s", ", ".join(sorted(payload.keys())))
         return payload
@@ -408,20 +465,55 @@ class CampusLoginClient:
             {"userIndex": user_index},
         )
 
+    def _get_online_user_info_with_retry(
+        self,
+        initial_user_index: str,
+    ) -> tuple[dict | None, str]:
+        user_index = initial_user_index
+        for attempt in range(2):
+            info = self.get_online_user_info(user_index)
+            if info is None:
+                return None, user_index
+
+            if info.get("result") == "success":
+                return info, user_index
+
+            message = str(info.get("message") or "获取在线状态失败")
+            if not self._looks_like_incomplete_user_info(message) or attempt == 1:
+                return info, user_index
+
+            self.logger.info("在线状态信息暂不完整，等待后重试一次。")
+            self._sleep(1)
+            rediscovered_user_index, discovery_status = self._discover_user_index()
+            if discovery_status == "not_online":
+                return {"result": "fail", "message": "当前用户不在线"}, user_index
+            if rediscovered_user_index:
+                user_index = rediscovered_user_index
+
+        return None, user_index
+
     def logout(self, user_index: str | None = None) -> bool:
         """Log out the current campus network session if one is active."""
         self.logger.info("开始校园网退出登录")
         self.session = self._create_session()
         try:
-            resolved_user_index = self._resolve_user_index(user_index)
+            resolved_user_index = user_index or self._last_user_index
+            discovery_status = "online"
+            if not resolved_user_index:
+                resolved_user_index, discovery_status = self._discover_user_index()
+
+            if discovery_status == "not_online":
+                self.logger.info("当前未检测到在线会话，无需退出。")
+                return True
+
             if not resolved_user_index:
                 self.logger.error(
                     "无法确定 userIndex。"
-                    "若当前会话不是由本工具刚登录，请提供 --username 或 --user-index。"
+                    "请在已在线状态下运行，或手动提供 --user-index。"
                 )
                 return False
 
-            info = self.get_online_user_info(resolved_user_index)
+            info, resolved_user_index = self._get_online_user_info_with_retry(resolved_user_index)
             if info is None:
                 return False
 

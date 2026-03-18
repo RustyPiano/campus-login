@@ -25,12 +25,16 @@ class FakeResponse:
         headers=None,
         json_data=None,
         json_exc=None,
+        url: str = "http://172.16.128.139/",
+        history=None,
     ):
         self.content = content
         self.status_code = status_code
         self.headers = headers or {}
         self._json_data = json_data
         self._json_exc = json_exc
+        self.url = url
+        self.history = list(history or [])
 
     def json(self):
         if self._json_exc is not None:
@@ -65,7 +69,7 @@ def make_config() -> ResolvedConfig:
         check_url="https://check.example",
         check_interval=30,
         max_retries=3,
-        trigger_url="http://123.123.123.123",
+        trigger_url="http://172.16.128.139/",
         config_path=Path("/tmp/campus.conf"),
         username_source="cli",
         password_source="cli",
@@ -146,9 +150,9 @@ class ClientTests(unittest.TestCase):
 
         prepared = client.build_interface_request("logout", {"userIndex": "abc"})
 
-        self.assertEqual(prepared.url, "http://123.123.123.123/eportal/InterFace.do?method=logout")
+        self.assertEqual(prepared.url, "http://172.16.128.139/eportal/InterFace.do?method=logout")
         self.assertEqual(prepared.data["userIndex"], "abc")
-        self.assertEqual(prepared.headers["Origin"], "http://123.123.123.123")
+        self.assertEqual(prepared.headers["Origin"], "http://172.16.128.139")
 
     def test_get_page_info_falls_back_to_manual_json_decode(self) -> None:
         json_content = (FIXTURES / "pageinfo.json").read_text(encoding="utf-8")
@@ -167,6 +171,18 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(payload["publicKeyExponent"], "10001")
         self.assertIn("publicKeyModulus", payload)
+
+    def test_parse_json_response_uses_custom_decoder_for_gbk_content(self) -> None:
+        payload_text = '{"result":"fail","message":"当前用户不在线，请重新认证"}'
+        response = FakeResponse(
+            content=payload_text.encode("gb18030"),
+            json_data={"result": "fail", "message": "ç¨æ·ä¿¡æ¯ä¸å®æ´ï¼è¯·ç¨åéè¯"},
+        )
+        client = CampusLoginClient(make_config(), make_logger())
+
+        payload = client._parse_json_response(response, action="getOnlineUserInfo")
+
+        self.assertEqual(payload["message"], "当前用户不在线，请重新认证")
 
     def test_login_uses_mac_value_for_password_encryption(self) -> None:
         redirect_html = (FIXTURES / "redirect.html").read_text(encoding="utf-8").encode("utf-8")
@@ -226,26 +242,34 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(client._last_user_index, "derived-index")
 
-    def test_logout_returns_success_when_user_is_not_online(self) -> None:
-        client = CampusLoginClient(make_config(), make_logger(), session_factory=FakeSession)
+    def test_logout_returns_success_when_portal_shows_login_page(self) -> None:
+        redirect_html = (FIXTURES / "redirect.html").read_text(encoding="utf-8").encode("utf-8")
+        session = FakeSession(
+            get_responses=[
+                FakeResponse(
+                    content=redirect_html,
+                    url="http://172.16.128.139/",
+                )
+            ]
+        )
+        client = CampusLoginClient(make_config(), make_logger(), session_factory=lambda: session)
 
-        with (
-            patch.object(client, "_resolve_user_index", return_value="user-index"),
-            patch.object(
-                client,
-                "get_online_user_info",
-                return_value={"result": "fail", "message": "当前用户不在线"},
-            ),
-        ):
-            result = client.logout()
+        result = client.logout()
 
         self.assertTrue(result)
 
     def test_logout_posts_logout_after_online_check(self) -> None:
-        client = CampusLoginClient(make_config(), make_logger(), session_factory=FakeSession)
+        session = FakeSession(
+            get_responses=[
+                FakeResponse(
+                    content=b"",
+                    url="http://172.16.128.139/eportal/success.jsp?userIndex=user-index",
+                )
+            ]
+        )
+        client = CampusLoginClient(make_config(), make_logger(), session_factory=lambda: session)
 
         with (
-            patch.object(client, "_resolve_user_index", return_value="user-index"),
             patch.object(
                 client,
                 "get_online_user_info",
@@ -262,6 +286,99 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(result)
         info_mock.assert_called_once_with("user-index")
         post_mock.assert_called_once_with("logout", {"userIndex": "user-index"})
+
+    def test_logout_retries_when_online_user_info_is_incomplete(self) -> None:
+        session = FakeSession(
+            get_responses=[
+                FakeResponse(
+                    content=b"",
+                    url="http://172.16.128.139/eportal/success.jsp?userIndex=user-index",
+                ),
+                FakeResponse(
+                    content=b"",
+                    url="http://172.16.128.139/eportal/success.jsp?userIndex=user-index-2",
+                ),
+            ]
+        )
+        sleep_calls = []
+        client = CampusLoginClient(
+            make_config(),
+            make_logger(),
+            session_factory=lambda: session,
+            sleep_func=sleep_calls.append,
+        )
+
+        with (
+            patch.object(
+                client,
+                "get_online_user_info",
+                side_effect=[
+                    {"result": "fail", "message": "用户信息不完整，请稍后重试"},
+                    {"result": "success", "userId": "test_user"},
+                ],
+            ) as info_mock,
+            patch.object(
+                client,
+                "_post_interface_json",
+                return_value={"result": "success", "message": "下线成功"},
+            ) as post_mock,
+        ):
+            result = client.logout()
+
+        self.assertTrue(result)
+        self.assertEqual(sleep_calls, [1])
+        self.assertEqual(info_mock.call_args_list[0].args[0], "user-index")
+        self.assertEqual(info_mock.call_args_list[1].args[0], "user-index-2")
+        post_mock.assert_called_once_with("logout", {"userIndex": "user-index-2"})
+
+    def test_logout_retry_treats_not_online_as_success(self) -> None:
+        redirect_html = (FIXTURES / "redirect.html").read_text(encoding="utf-8").encode("utf-8")
+        session = FakeSession(
+            get_responses=[
+                FakeResponse(
+                    content=b"",
+                    url="http://172.16.128.139/eportal/success.jsp?userIndex=user-index",
+                ),
+                FakeResponse(
+                    content=redirect_html,
+                    url="http://172.16.128.139/",
+                ),
+            ]
+        )
+        sleep_calls = []
+        client = CampusLoginClient(
+            make_config(),
+            make_logger(),
+            session_factory=lambda: session,
+            sleep_func=sleep_calls.append,
+        )
+
+        with patch.object(
+            client,
+            "get_online_user_info",
+            return_value={"result": "fail", "message": "用户信息不完整，请稍后重试"},
+        ):
+            result = client.logout()
+
+        self.assertTrue(result)
+        self.assertEqual(sleep_calls, [1])
+
+    def test_find_login_page_url_supports_direct_final_url(self) -> None:
+        client = CampusLoginClient(make_config(), make_logger())
+        response = FakeResponse(
+            content=b"<html>login page</html>",
+            url=(
+                "http://172.16.128.139/eportal/index.jsp?"
+                "wlanuserip=1&nasip=2&mac=3"
+            ),
+        )
+
+        login_url = client._find_login_page_url(response)
+
+        self.assertEqual(
+            login_url,
+            "http://172.16.128.139/eportal/index.jsp?wlanuserip=1&nasip=2&mac=3",
+        )
 
     def test_login_with_retry_uses_backoff(self) -> None:
         sleep_calls = []

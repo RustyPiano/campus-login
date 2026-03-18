@@ -64,8 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="退出当前校园网会话",
     )
     logout_parser.add_argument("--config", help=f"配置文件路径，默认 {DEFAULT_CONFIG_PATH}")
-    logout_parser.add_argument("-u", "--username", help="校园网用户名，用于派生 userIndex")
-    logout_parser.add_argument("--user-index", help="直接指定 userIndex，跳过本地派生")
+    logout_parser.add_argument("--user-index", help="直接指定 userIndex，跳过本地自动发现")
     logout_parser.set_defaults(handler=handle_logout)
 
     watch_parser = subparsers.add_parser(

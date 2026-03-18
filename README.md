@@ -71,10 +71,10 @@ campus-login login
 campus-login logout
 ```
 
-如果当前会话不是由本工具刚刚登录，推荐同时提供用户名帮助派生 `userIndex`：
+如果自动发现失败，也可以手动提供 `userIndex`：
 
 ```bash
-campus-login logout --username your_name
+campus-login logout --user-index your_user_index
 ```
 
 6. 前台持续监控并自动重连：
@@ -113,7 +113,6 @@ campus-login watch --interval 30 --retries 3
 
 ```bash
 campus-login logout
-campus-login logout --username your_name
 campus-login logout --user-index your_user_index
 ```
 
